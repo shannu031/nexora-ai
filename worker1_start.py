@@ -1,5 +1,6 @@
 import argparse
 import importlib.metadata
+import platform
 import os
 import queue
 import re
@@ -60,6 +61,56 @@ def download_model(model_directory=DEFAULT_MODEL_DIRECTORY):
     if any(not (snapshot_path / filename).is_file() for filename in MODEL_FILES):
         raise RuntimeError("The pinned Qwen GGUF model shards are incomplete.")
     return snapshot_path / MODEL_FILES[0]
+
+
+def validate_native_llama_cpp():
+    try:
+        import llama_cpp
+    except Exception as error:
+        raise RuntimeError(
+            "llama_cpp native import failed. The Worker 1 package must use the "
+            "glibc/x86_64 CPU build; musl-linked libraries are incompatible."
+        ) from error
+
+    try:
+        package_version = importlib.metadata.version("llama-cpp-python")
+    except importlib.metadata.PackageNotFoundError:
+        package_version = getattr(llama_cpp, "__version__", "unknown")
+
+    package_dir = Path(llama_cpp.__file__).resolve().parent
+    native_libraries = sorted(package_dir.glob("lib/*.so"))
+    libllama = next((path for path in native_libraries if path.name == "libllama.so"), None)
+    if libllama is None:
+        raise RuntimeError("llama_cpp package does not contain libllama.so.")
+
+    libc_name = platform.libc_ver()[0]
+    if libc_name != "glibc":
+        raise RuntimeError(
+            f"Kaggle must use glibc; detected libc implementation: {libc_name or 'unknown'}"
+        )
+
+    try:
+        dependency_check = subprocess.run(
+            ["readelf", "-d", str(libllama)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("readelf is required to validate the native llama library.") from error
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError("readelf could not inspect libllama.so.") from error
+
+    needed = dependency_check.stdout.lower()
+    if "musl" in needed:
+        raise RuntimeError("libllama.so is linked to musl libc and is incompatible with Kaggle glibc.")
+
+    print(
+        f"llama-cpp-python {package_version}; glibc native import OK; "
+        f"libllama.so: {libllama}",
+        flush=True,
+    )
+    return libllama
 
 
 def verify_llama_cpp_runtime(model_directory):
@@ -225,6 +276,7 @@ def start_tunnel(cloudflared_path, port):
 
 
 def run(cloudflared_path):
+    validate_native_llama_cpp()
     api_key = read_api_key_from_kaggle()
     os.environ[API_KEY_SECRET_NAME] = api_key
     port = int(os.environ.get("NEXORA_WORKER_1_PORT", "7860"))

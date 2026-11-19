@@ -130,6 +130,45 @@ class WorkerOneStartupTests(unittest.TestCase):
 
         self.assertEqual(detected_backend, cpu_backend)
 
+    def test_native_import_failure_names_glibc_requirement(self):
+        fake_import_error = types.ModuleType("llama_cpp")
+
+        with patch.dict(sys.modules, {"llama_cpp": None}):
+            with self.assertRaisesRegex(RuntimeError, "glibc/x86_64 CPU build"):
+                worker1_start.validate_native_llama_cpp()
+
+    def test_musl_native_dependency_is_rejected(self):
+        fake_llama_cpp = types.ModuleType("llama_cpp")
+        fake_llama_cpp.__version__ = "0.3.19"
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            package_directory = Path(temporary_directory) / "llama_cpp"
+            native_directory = package_directory / "lib"
+            native_directory.mkdir(parents=True)
+            libllama = native_directory / "libllama.so"
+            libllama.touch()
+            fake_llama_cpp.__file__ = str(package_directory / "__init__.py")
+
+            fake_result = subprocess_result = types.SimpleNamespace(
+                stdout="0x00000001 (NEEDED) Shared library: [libc.musl-x86_64.so.1]\n",
+                stderr="",
+            )
+            with patch.dict(sys.modules, {"llama_cpp": fake_llama_cpp}), patch.object(
+                worker1_start.importlib.metadata,
+                "version",
+                return_value="0.3.19",
+            ), patch.object(
+                worker1_start.platform,
+                "libc_ver",
+                return_value=("glibc", "2.39"),
+            ), patch.object(
+                worker1_start.subprocess,
+                "run",
+                return_value=fake_result,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "musl libc"):
+                    worker1_start.validate_native_llama_cpp()
+
     def test_model_load_exception_is_preserved(self):
         failure = RuntimeError("GGUF load failed in llama-cpp test")
 
@@ -158,6 +197,15 @@ class WorkerOneStartupTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "GGUF load failed"):
                     worker1_start.load_model(model_directory / worker1_start.MODEL_FILES[0])
+
+    def test_shell_entry_forces_official_glibc_source_build(self):
+        shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()
+        self.assertIn("llama_cpp_python-0.3.19.tar.gz", shell_text)
+        self.assertIn("6816e4a0a74ae9a356e7a0546e13147543f01f695c86a28d940e4b86519acf13", shell_text)
+        self.assertIn("--no-cache-dir", shell_text)
+        self.assertIn("--no-binary=:all:", shell_text)
+        self.assertNotIn("--no-deps", shell_text)
+        self.assertNotIn("abetlen.github.io/llama-cpp-python", shell_text)
 
     def test_shell_entry_prints_marker_and_runs_python_unbuffered(self):
         shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()

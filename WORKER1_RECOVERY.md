@@ -27,6 +27,38 @@ does not generate a key, write one to disk, or print it. The same Kaggle secret
 therefore remains stable across Kaggle session restarts. The Codespaces API-key
 secret remains unchanged.
 
+## Native llama-cpp Build
+
+Do not install a wheel from the former `abetlen.github.io` CPU wheel index. Its
+Python 3.13 Linux x86_64 `llama-cpp-python` artifact can be linked to
+`libc.musl-x86_64.so.1`, while Kaggle uses glibc. Official PyPI 0.3.19 provides
+only a source tarball, so `start_worker1.sh` downloads that exact tarball, verifies
+its SHA-256, disables pip caches, and builds it locally with CMake for glibc.
+The script also removes a previous package installation before rebuilding.
+
+At the start of Worker 1 execution, `worker1_start.py` imports `llama_cpp` before
+downloading model shards. It reports the package location and rejects a
+`libllama.so` that names musl in `readelf -d` output. No fake libc link or musl
+installation is used.
+
+Before launching, the native package can be checked in Kaggle with:
+
+```python
+import llama_cpp
+from pathlib import Path
+print(llama_cpp.__file__)
+print(platform_libc := __import__('platform').libc_ver())
+```
+
+```sh
+readelf -d /usr/local/lib/python3.13/dist-packages/llama_cpp/lib/libllama.so | grep NEEDED
+ldd /usr/local/lib/python3.13/dist-packages/llama_cpp/lib/libllama.so
+```
+
+The package should show glibc through `platform.libc_ver()`, and `ldd` should
+report glibc libraries, not `libc.musl-x86_64.so.1`. The exact package path may
+differ, so use `llama_cpp.__file__` to locate `libllama.so` in the first check.
+
 ## Start Or Recover
 
 From a Kaggle notebook cell, synchronize the repository checkout explicitly:
