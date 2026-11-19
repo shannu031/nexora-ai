@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+import io
 from pathlib import Path
 from unittest.mock import patch
 
@@ -105,6 +106,85 @@ class WorkerOneStartupTests(unittest.TestCase):
                 model_path = worker1_start.download_model(model_directory)
 
         self.assertEqual(model_path.name, worker1_start.MODEL_FILES[0])
+
+    def test_llama_cpp_runtime_preflight_requires_cpu_backend_and_both_shards(self):
+        fake_llama_cpp = types.ModuleType("llama_cpp")
+        fake_llama_cpp.__version__ = "0.3.19"
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_directory = Path(temporary_directory)
+            for filename in worker1_start.MODEL_FILES:
+                (model_directory / filename).touch()
+
+            package_directory = model_directory / "llama_cpp"
+            cpu_backend = package_directory / "lib" / "libggml-cpu.so"
+            cpu_backend.parent.mkdir(parents=True)
+            cpu_backend.touch()
+            fake_llama_cpp.__file__ = str(package_directory / "__init__.py")
+
+            with patch.dict(sys.modules, {"llama_cpp": fake_llama_cpp}), patch(
+                "sys.stdout",
+                new_callable=io.StringIO,
+            ):
+                detected_backend = worker1_start.verify_llama_cpp_runtime(model_directory)
+
+        self.assertEqual(detected_backend, cpu_backend)
+
+    def test_model_load_exception_is_preserved(self):
+        failure = RuntimeError("GGUF load failed in llama-cpp test")
+
+        class FakeLlama:
+            def __init__(self, **kwargs):
+                raise failure
+
+        fake_llama_cpp = types.ModuleType("llama_cpp")
+        fake_llama_cpp.__file__ = "/tmp/llama_cpp/__init__.py"
+        fake_llama_cpp.Llama = FakeLlama
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_directory = Path(temporary_directory)
+            for filename in worker1_start.MODEL_FILES:
+                (model_directory / filename).touch()
+
+            package_directory = model_directory / "llama_cpp"
+            cpu_backend = package_directory / "lib" / "libggml-cpu.so"
+            cpu_backend.parent.mkdir(parents=True)
+            cpu_backend.touch()
+            fake_llama_cpp.__file__ = str(package_directory / "__init__.py")
+
+            with patch.dict(sys.modules, {"llama_cpp": fake_llama_cpp}), patch.dict(
+                os.environ,
+                {"KAGGLE_RUNNING_IN_JUPYTERLAB": "1"},
+            ):
+                with self.assertRaisesRegex(RuntimeError, "GGUF load failed"):
+                    worker1_start.load_model(model_directory / worker1_start.MODEL_FILES[0])
+
+    def test_shell_entry_prints_marker_and_runs_python_unbuffered(self):
+        shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()
+        self.assertIn("WORKER1_DIAGNOSTICS_V2 shell entry", shell_text)
+        self.assertIn("exec python -u worker1_start.py", shell_text)
+        self.assertIn("Stale Worker 1 copy detected", shell_text)
+        self.assertIn("WORKER1_DIAGNOSTICS_V2", shell_text)
+
+    def test_main_prints_version_marker_before_complete_traceback(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch.object(worker1_start, "run", side_effect=RuntimeError("exact load error")), patch.object(
+            sys,
+            "argv",
+            ["worker1_start.py", "--cloudflared", "/tmp/cloudflared"],
+        ), patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+            exit_code = worker1_start.main()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("WORKER1_DIAGNOSTICS_V2", stdout.getvalue())
+        traceback_output = stderr.getvalue()
+        traceback_position = traceback_output.find("Traceback (most recent call last)")
+        exception_position = traceback_output.find("RuntimeError: exact load error")
+        generic_position = traceback_output.find("Worker 1 startup failed")
+        self.assertGreaterEqual(traceback_position, 0)
+        self.assertGreater(exception_position, traceback_position)
+        self.assertGreater(generic_position, exception_position)
 
     def test_tunnel_url_detection_and_key_environment_isolation(self):
         api_key = secrets.token_urlsafe(32)

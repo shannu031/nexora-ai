@@ -17,8 +17,10 @@ repeatable, not permanent.
    replace the Codespaces key as part of this setup. GitHub does not reveal a
    saved secret value; if the existing value is not available from its secure
    source, stop and resolve that before launching Worker 1.
-4. Enable Internet for the Kaggle session. The startup downloads pinned Python
-   packages, Cloudflare Tunnel, and the public model files.
+4. Use a Kaggle runtime reporting Python 3.13 on x86_64 Linux, such as the
+   provided Kaggle environment. Enable Internet in the session. The startup
+   downloads pinned Python packages, Cloudflare Tunnel, and the public model
+   files. It fails before installation if the Python 3.13 runtime is absent.
 
 The launcher reads the key with Kaggle's `UserSecretsClient` on every start. It
 does not generate a key, write one to disk, or print it. The same Kaggle secret
@@ -27,11 +29,35 @@ secret remains unchanged.
 
 ## Start Or Recover
 
-From a Kaggle notebook cell, run:
+From a Kaggle notebook cell, synchronize the repository checkout explicitly:
+
+```sh
+%cd /kaggle/working/nexora-ai
+!git fetch origin
+!git reset --hard origin/main
+!git status --short --branch
+!grep -n 'WORKER1_DIAGNOSTICS_V2 shell entry' start_worker1.sh
+```
+
+Use `git reset --hard` only after confirming Kaggle has no local files worth
+preserving. The model cache under `/kaggle/working/nexora-worker1-model` is not
+removed by this reset.
+
+Only run the launcher after the grep command prints the exact diagnostic marker:
 
 ```sh
 !bash /kaggle/working/nexora-ai/start_worker1.sh
 ```
+
+The shell marker must be the first diagnostics line:
+
+```text
+WORKER1_DIAGNOSTICS_V2 shell entry
+```
+
+If this marker is absent or the line says a stale copy was detected, the Kaggle
+checkout is not running the reviewed launcher. After the implementation has
+been committed and pushed, synchronize `origin/main` again before restarting.
 
 The script pins the Cloudflare Tunnel binary and verifies its SHA-256 checksum,
 installs the versions in `requirements-worker1.txt`, downloads both Q4_K_M

@@ -1,4 +1,5 @@
 import argparse
+import importlib.metadata
 import os
 import queue
 import re
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -15,6 +17,7 @@ import uvicorn
 import worker1_app
 
 
+WORKER1_DIAGNOSTICS_V2 = "WORKER1_DIAGNOSTICS_V2"
 MODEL_REPOSITORY = "Qwen/Qwen2.5-7B-Instruct-GGUF"
 MODEL_REVISION = "bb5d59e06d9551d752d08b292a50eb208b07ab1f"
 MODEL_FILES = (
@@ -59,15 +62,91 @@ def download_model(model_directory=DEFAULT_MODEL_DIRECTORY):
     return snapshot_path / MODEL_FILES[0]
 
 
+def verify_llama_cpp_runtime(model_directory):
+    import llama_cpp
+
+    try:
+        package_version = importlib.metadata.version("llama-cpp-python")
+    except importlib.metadata.PackageNotFoundError:
+        package_version = getattr(llama_cpp, "__version__", "unknown")
+
+    package_dir = Path(llama_cpp.__file__).resolve().parent
+    cpu_backend = package_dir / "lib" / "libggml-cpu.so"
+    if not cpu_backend.is_file():
+        raise RuntimeError(
+            f"llama-cpp-python {package_version} "
+            "does not contain libggml-cpu.so."
+        )
+
+    shard_sizes = {}
+    for filename in MODEL_FILES:
+        shard_path = Path(model_directory) / filename
+        if not shard_path.is_file():
+            raise RuntimeError(f"Required GGUF shard is missing: {shard_path}")
+        shard_sizes[filename] = shard_path.stat().st_size
+
+    print(
+        f"llama-cpp-python {package_version}; CPU backend: {cpu_backend}",
+        flush=True,
+    )
+    print(
+        "Qwen GGUF shards: "
+        + ", ".join(f"{name}={size} bytes" for name, size in shard_sizes.items()),
+        flush=True,
+    )
+    return cpu_backend
+
+
 def load_model(model_path):
     from llama_cpp import Llama
 
+    model_path = Path(model_path)
+    if not model_path.is_file():
+        raise RuntimeError(f"The split GGUF entry shard is missing: {model_path}")
+
+    missing_shards = [
+        model_path.parent / filename
+        for filename in MODEL_FILES
+        if not (model_path.parent / filename).is_file()
+    ]
+    if missing_shards:
+        raise RuntimeError(
+            "Both pinned Qwen GGUF shards are required; missing: "
+            + ", ".join(filename.name for filename in missing_shards)
+        )
+
+    verify_llama_cpp_runtime(model_path.parent)
+
+    available_ram_bytes = None
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                available_ram_bytes = int(line.split()[1]) * 1024
+                break
+    except OSError:
+        pass
+    if available_ram_bytes is not None:
+        print(
+            f"Available RAM before model load: {available_ram_bytes / (1024**3):.1f} GiB",
+            flush=True,
+        )
+
     cpu_count = os.cpu_count() or 1
+    print(
+        "CPU model configuration: "
+        f"n_ctx=2048, n_batch=512, n_threads={min(cpu_count, 4)}, "
+        "n_gpu_layers=0, use_mmap=True, use_mlock=False",
+        flush=True,
+    )
     return Llama(
         model_path=str(model_path),
-        n_ctx=4096,
+        n_ctx=2048,
+        n_batch=512,
         n_threads=min(cpu_count, 4),
-        verbose=False,
+        n_gpu_layers=0,
+        use_mmap=True,
+        use_mlock=False,
+        verbose=True,
     )
 
 
@@ -152,7 +231,12 @@ def run(cloudflared_path):
 
     print("Downloading the pinned Qwen 2.5 7B Instruct Q4_K_M model.", flush=True)
     model_path = download_model()
-    print("Loading the CPU model.", flush=True)
+    model_directory = model_path.parent
+    print(
+        "Loading the CPU model with split shards: "
+        f"{model_directory / MODEL_FILES[0]}, {model_directory / MODEL_FILES[1]}.",
+        flush=True,
+    )
     worker1_app.app.state.model = load_model(model_path)
 
     server = uvicorn.Server(
@@ -182,6 +266,8 @@ def run(cloudflared_path):
 
 
 def main(argv=None):
+    print(WORKER1_DIAGNOSTICS_V2, flush=True)
+    print(f"Worker 1 launcher path: {Path(__file__).resolve()}", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--cloudflared", required=True)
     arguments = parser.parse_args(argv)
@@ -191,8 +277,9 @@ def main(argv=None):
         print("Worker 1 stopped.", flush=True)
         return 0
     except Exception:
+        traceback.print_exc(file=sys.stderr)
         print(
-            "Worker 1 startup failed. Check Kaggle internet access, attached secrets, and available CPU memory.",
+            "Worker 1 startup failed. Complete traceback shown above.",
             file=sys.stderr,
             flush=True,
         )

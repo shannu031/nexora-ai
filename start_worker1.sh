@@ -1,8 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+printf '%s\n' 'WORKER1_DIAGNOSTICS_V2 shell entry'
+printf 'Worker 1 launcher shell path: %s\n' "${BASH_SOURCE[0]}"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+if [[ ! -f worker1_start.py ]] || ! grep -Fq 'WORKER1_DIAGNOSTICS_V2' worker1_start.py; then
+  printf '%s\n' 'Stale Worker 1 copy detected: worker1_start.py lacks WORKER1_DIAGNOSTICS_V2.' >&2
+  exit 1
+fi
+
+PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [[ "$PYTHON_VERSION" != "3.13" ]]; then
+  printf 'Expected Kaggle Python 3.13; found Python %s.\n' "$PYTHON_VERSION" >&2
+  exit 1
+fi
 
 python -m pip install \
   --disable-pip-version-check \
@@ -35,4 +49,4 @@ printf '%s  %s\n' "$CLOUDFLARED_SHA256" "$CLOUDFLARED_PATH" | sha256sum --check 
 }
 chmod 700 "$CLOUDFLARED_PATH"
 
-exec python worker1_start.py --cloudflared "$CLOUDFLARED_PATH"
+exec python -u worker1_start.py --cloudflared "$CLOUDFLARED_PATH"
