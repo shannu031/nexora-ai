@@ -49,7 +49,7 @@ python -m pip install \
   --disable-pip-version-check \
   --no-cache-dir \
   --force-reinstall \
-  --no-binary=:all: \
+  --no-binary=llama-cpp-python \
   "$LLAMA_CPP_SDIST_PATH"
 
 python -m pip install \

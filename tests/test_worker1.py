@@ -219,7 +219,8 @@ class WorkerOneStartupTests(unittest.TestCase):
         self.assertIn("llama_cpp_python-0.3.19.tar.gz", shell_text)
         self.assertIn("6816e4a0a74ae9a356e7a0546e13147543f01f695c86a28d940e4b86519acf13", shell_text)
         self.assertIn("--no-cache-dir", shell_text)
-        self.assertIn("--no-binary=:all:", shell_text)
+        self.assertIn("--no-binary=llama-cpp-python", shell_text)
+        self.assertNotIn("--no-binary=:all:", shell_text)
         self.assertNotIn("--no-deps", shell_text)
         self.assertNotIn("abetlen.github.io/llama-cpp-python", shell_text)
 
