@@ -198,6 +198,22 @@ class WorkerOneStartupTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "GGUF load failed"):
                     worker1_start.load_model(model_directory / worker1_start.MODEL_FILES[0])
 
+    def test_download_urls_are_plain_and_free_of_markdown(self):
+        shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()
+        llama_url = (
+            "LLAMA_CPP_SDIST_URL='https://files.pythonhosted.org/packages/"
+            "d7/0f/b26ceec20294f5d592ac137ccc2f10e91fa1f35bb8555906b5718a625ac1/"
+            "llama_cpp_python-0.3.19.tar.gz'"
+        )
+        cloudflared_url = (
+            'CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/download/'
+            '${CLOUDFLARED_VERSION}/cloudflared-linux-${CLOUD_FLARED_ARCH}"'
+        )
+        self.assertIn(llama_url, shell_text)
+        self.assertIn(cloudflared_url, shell_text)
+        self.assertNotIn("](", shell_text)
+        self.assertNotIn("[https://", shell_text)
+
     def test_shell_entry_forces_official_glibc_source_build(self):
         shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()
         self.assertIn("llama_cpp_python-0.3.19.tar.gz", shell_text)
