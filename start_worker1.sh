@@ -23,39 +23,14 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
   exit 1
 fi
 
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get update -qq
-  apt-get install -y -qq build-essential cmake ninja-build
-else
-  printf '%s\n' 'apt-get is required for the reproducible glibc source build.' >&2
-  exit 1
-fi
-
 python -m pip uninstall -y llama-cpp-python >/dev/null 2>&1 || true
-python -m pip install --disable-pip-version-check --quiet --upgrade pip setuptools wheel
-CMAKE_ARGS='-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF -DLLAMA_BUILD_TESTS=OFF'
-CMAKE_BUILD_PARALLEL_LEVEL=2
-export CMAKE_ARGS CMAKE_BUILD_PARALLEL_LEVEL
-LLAMA_CPP_SDIST_URL='https://files.pythonhosted.org/packages/d7/0f/b26ceec20294f5d592ac137ccc2f10e91fa1f35bb8555906b5718a625ac1/llama_cpp_python-0.3.19.tar.gz'
-LLAMA_CPP_SDIST_SHA256='6816e4a0a74ae9a356e7a0546e13147543f01f695c86a28d940e4b86519acf13'
-LLAMA_CPP_SDIST_PATH="${TMPDIR:-/tmp}/llama_cpp_python-0.3.19.tar.gz"
-curl --silent --show-error --fail --location --output "$LLAMA_CPP_SDIST_PATH" "$LLAMA_CPP_SDIST_URL"
-printf '%s  %s\n' "$LLAMA_CPP_SDIST_SHA256" "$LLAMA_CPP_SDIST_PATH" | sha256sum --check --status || {
-  rm -f "$LLAMA_CPP_SDIST_PATH"
-  printf '%s\n' 'llama-cpp-python source download failed SHA-256 verification.' >&2
-  exit 1
-}
 python -m pip install \
   --disable-pip-version-check \
   --no-cache-dir \
   --force-reinstall \
-  --no-binary=llama-cpp-python \
-  "$LLAMA_CPP_SDIST_PATH"
-
-python -m pip install \
-  --disable-pip-version-check \
-  --no-cache-dir \
-  --no-binary=llama-cpp-python \
+  --index-url https://pypi.org/simple \
+  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+  --only-binary=llama-cpp-python \
   -r requirements-worker1.txt
 
 case "$(uname -m)" in

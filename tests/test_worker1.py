@@ -109,7 +109,7 @@ class WorkerOneStartupTests(unittest.TestCase):
 
     def test_llama_cpp_runtime_preflight_requires_cpu_backend_and_both_shards(self):
         fake_llama_cpp = types.ModuleType("llama_cpp")
-        fake_llama_cpp.__version__ = "0.3.19"
+        fake_llama_cpp.__version__ = "0.3.36"
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             model_directory = Path(temporary_directory)
@@ -139,7 +139,7 @@ class WorkerOneStartupTests(unittest.TestCase):
 
     def test_musl_native_dependency_is_rejected(self):
         fake_llama_cpp = types.ModuleType("llama_cpp")
-        fake_llama_cpp.__version__ = "0.3.19"
+        fake_llama_cpp.__version__ = "0.3.36"
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             package_directory = Path(temporary_directory) / "llama_cpp"
@@ -156,7 +156,7 @@ class WorkerOneStartupTests(unittest.TestCase):
             with patch.dict(sys.modules, {"llama_cpp": fake_llama_cpp}), patch.object(
                 worker1_start.importlib.metadata,
                 "version",
-                return_value="0.3.19",
+                return_value="0.3.36",
             ), patch.object(
                 worker1_start.platform,
                 "libc_ver",
@@ -200,29 +200,27 @@ class WorkerOneStartupTests(unittest.TestCase):
 
     def test_download_urls_are_plain_and_free_of_markdown(self):
         shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()
-        llama_url = (
-            "LLAMA_CPP_SDIST_URL='https://files.pythonhosted.org/packages/"
-            "d7/0f/b26ceec20294f5d592ac137ccc2f10e91fa1f35bb8555906b5718a625ac1/"
-            "llama_cpp_python-0.3.19.tar.gz'"
-        )
         cloudflared_url = (
             'CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/download/'
             '${CLOUDFLARED_VERSION}/cloudflared-linux-${CLOUD_FLARED_ARCH}"'
         )
-        self.assertIn(llama_url, shell_text)
         self.assertIn(cloudflared_url, shell_text)
+        self.assertNotIn("LLAMA_CPP_SDIST_URL", shell_text)
         self.assertNotIn("](", shell_text)
         self.assertNotIn("[https://", shell_text)
 
-    def test_shell_entry_forces_official_glibc_source_build(self):
+    def test_shell_entry_uses_pinned_cpu_wheel_without_source_build(self):
         shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()
-        self.assertIn("llama_cpp_python-0.3.19.tar.gz", shell_text)
-        self.assertIn("6816e4a0a74ae9a356e7a0546e13147543f01f695c86a28d940e4b86519acf13", shell_text)
+        requirements_text = Path(__file__).resolve().parents[1].joinpath("requirements-worker1.txt").read_text()
+        self.assertIn("llama-cpp-python==0.3.36", requirements_text)
+        self.assertIn("--index-url https://pypi.org/simple", shell_text)
+        self.assertIn("--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu", shell_text)
+        self.assertIn("--only-binary=llama-cpp-python", shell_text)
         self.assertIn("--no-cache-dir", shell_text)
-        self.assertIn("--no-binary=llama-cpp-python", shell_text)
-        self.assertNotIn("--no-binary=:all:", shell_text)
-        self.assertNotIn("--no-deps", shell_text)
-        self.assertNotIn("abetlen.github.io/llama-cpp-python", shell_text)
+        self.assertNotIn("LLAMA_CPP_SDIST_URL", shell_text)
+        self.assertNotIn("--no-binary", shell_text)
+        self.assertNotIn("CMAKE_ARGS", shell_text)
+        self.assertNotIn("apt-get install", shell_text)
 
     def test_shell_entry_prints_marker_and_runs_python_unbuffered(self):
         shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()

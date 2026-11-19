@@ -27,14 +27,14 @@ does not generate a key, write one to disk, or print it. The same Kaggle secret
 therefore remains stable across Kaggle session restarts. The Codespaces API-key
 secret remains unchanged.
 
-## Native llama-cpp Build
+## Native llama-cpp Wheel
 
-Do not install a wheel from the former `abetlen.github.io` CPU wheel index. Its
-Python 3.13 Linux x86_64 `llama-cpp-python` artifact can be linked to
-`libc.musl-x86_64.so.1`, while Kaggle uses glibc. Official PyPI 0.3.19 provides
-only a source tarball, so `start_worker1.sh` downloads that exact tarball, verifies
-its SHA-256, disables pip caches, and builds it locally with CMake for glibc.
-The script also removes a previous package installation before rebuilding.
+Worker 1 pins `llama-cpp-python==0.3.36` and installs the verified Python 3.13
+Linux x86_64 CPU wheel from the `abetlen.github.io` CPU wheel index, with PyPI
+remaining the primary index for other requirements. Installation uses
+`--only-binary=llama-cpp-python` and `--no-cache-dir`, so pip cannot fall back to
+a source build or reuse the previously cached musl-linked wheel. The startup no
+longer installs CMake/compiler packages or builds llama-cpp-python from source.
 
 At the start of Worker 1 execution, `worker1_start.py` imports `llama_cpp` before
 downloading model shards. It reports the package location and rejects a
