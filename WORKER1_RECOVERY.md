@@ -75,11 +75,21 @@ Use `git reset --hard` only after confirming Kaggle has no local files worth
 preserving. The model cache under `/kaggle/working/nexora-worker1-model` is not
 removed by this reset.
 
-Only run the launcher after the grep command prints the exact diagnostic marker:
+For a full recovery, run the launcher in the foreground in a Kaggle cell. Keep
+that cell running; do not use `nohup` or append `&`. The launcher supervises
+both the FastAPI server and Cloudflare Tunnel, so the cell remains active while
+the worker is healthy and prints a specific traceback/status if either exits.
+
+If the wheel and Python dependencies are already installed, verify startup
+without reinstalling them by running this foreground Kaggle cell command:
 
 ```sh
-!bash /kaggle/working/nexora-ai/start_worker1.sh
+!NEXORA_WORKER_1_SKIP_INSTALL=1 bash /kaggle/working/nexora-ai/start_worker1.sh
 ```
+
+The skip flag verifies the installed `llama-cpp-python==0.3.36` version and
+glibc native libraries before continuing. It does not skip model cache checks,
+health verification, or tunnel startup.
 
 The shell marker must be the first diagnostics line:
 
@@ -99,6 +109,10 @@ shards from Hugging Face revision
 Wait for the line beginning `Worker 1 tunnel URL:`. The tunnel URL is public;
 the API key is not included in that line or forwarded to the `cloudflared`
 process. Keep the notebook session running while the worker is in use.
+By default the API listens on `127.0.0.1:7860`; set
+`NEXORA_WORKER_1_PORT` only when a different local port is required. Startup
+prints the selected port and confirms the authenticated `/health` check before
+opening the tunnel.
 
 To update the URL in GitHub Codespaces without changing the API-key secret,
 run `bash update_worker1_url.sh` from the repository in a terminal authenticated

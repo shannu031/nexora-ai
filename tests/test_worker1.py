@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 import io
+import queue
 from pathlib import Path
 from unittest.mock import patch
 
@@ -198,6 +199,70 @@ class WorkerOneStartupTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "GGUF load failed"):
                     worker1_start.load_model(model_directory / worker1_start.MODEL_FILES[0])
 
+    def test_tunnel_exit_reports_child_status(self):
+        server_thread = types.SimpleNamespace(is_alive=lambda: True)
+        tunnel = types.SimpleNamespace(poll=lambda: 17)
+        with self.assertRaisesRegex(RuntimeError, "Cloudflare Tunnel exited.*17"):
+            worker1_start.monitor_worker_processes(
+                server_thread,
+                tunnel,
+                queue.Queue(),
+                poll_interval=0,
+            )
+
+    def test_server_thread_exception_is_propagated(self):
+        failure = OSError("test bind failure")
+        server_failures = queue.Queue()
+        server_failures.put(failure)
+        server_thread = types.SimpleNamespace(is_alive=lambda: False)
+        tunnel = types.SimpleNamespace(poll=lambda: None)
+
+        with self.assertRaisesRegex(RuntimeError, "FastAPI server crashed") as raised:
+            worker1_start.monitor_worker_processes(
+                server_thread,
+                tunnel,
+                server_failures,
+                poll_interval=0,
+            )
+        self.assertIs(raised.exception.__cause__, failure)
+
+    def test_health_wait_fails_immediately_if_server_thread_stops(self):
+        failure = OSError("test bind failure")
+        server_failures = queue.Queue()
+        server_failures.put(failure)
+        server_thread = types.SimpleNamespace(is_alive=lambda: False)
+
+        with self.assertRaisesRegex(RuntimeError, "FastAPI server crashed") as raised:
+            worker1_start.wait_for_health(
+                "test-only-key",
+                7860,
+                timeout=120,
+                server_thread=server_thread,
+                server_failures=server_failures,
+            )
+        self.assertIs(raised.exception.__cause__, failure)
+
+    def test_tunnel_output_remains_visible_after_url(self):
+        output = io.StringIO()
+        process = types.SimpleNamespace(
+            stdout=[
+                "https://worker-recovery.trycloudflare.com\n",
+                "connection failed\n",
+            ]
+        )
+        output_queue = queue.Queue()
+
+        with patch("sys.stdout", output):
+            worker1_start._read_tunnel_output(process, output_queue)
+
+        self.assertIn("https://worker-recovery.trycloudflare.com", output.getvalue())
+        self.assertIn("connection failed", output.getvalue())
+        self.assertEqual(
+            output_queue.get_nowait(),
+            "https://worker-recovery.trycloudflare.com",
+        )
+        self.assertTrue(output_queue.empty())
+
     def test_download_urls_are_plain_and_free_of_markdown(self):
         shell_text = Path(__file__).resolve().parents[1].joinpath("start_worker1.sh").read_text()
         cloudflared_url = (
@@ -217,6 +282,8 @@ class WorkerOneStartupTests(unittest.TestCase):
         self.assertIn("--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu", shell_text)
         self.assertIn("--only-binary=llama-cpp-python", shell_text)
         self.assertIn("--no-cache-dir", shell_text)
+        self.assertIn("NEXORA_WORKER_1_SKIP_INSTALL", shell_text)
+        self.assertIn("validate_native_llama_cpp()", shell_text)
         self.assertNotIn("LLAMA_CPP_SDIST_URL", shell_text)
         self.assertNotIn("--no-binary", shell_text)
         self.assertNotIn("CMAKE_ARGS", shell_text)

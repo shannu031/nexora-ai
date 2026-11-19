@@ -212,13 +212,15 @@ def cloudflared_environment():
     return environment
 
 
-def wait_for_health(api_key, port, timeout=120):
+def wait_for_health(api_key, port, timeout=120, server_thread=None, server_failures=None):
     deadline = time.monotonic() + timeout
     request = Request(
         f"http://127.0.0.1:{port}/health",
         headers={"X-API-Key": api_key},
     )
     while time.monotonic() < deadline:
+        if server_thread is not None and not server_thread.is_alive():
+            _raise_server_stopped(server_failures, "before health check succeeded")
         try:
             with urlopen(request, timeout=2) as response:
                 if response.status == 200:
@@ -228,9 +230,39 @@ def wait_for_health(api_key, port, timeout=120):
     raise RuntimeError("Worker 1 did not become healthy before the startup timeout.")
 
 
+def _run_uvicorn(server, server_failures):
+    try:
+        server.run()
+    except BaseException as error:
+        server_failures.put(error)
+
+
+def _raise_server_stopped(server_failures, phase):
+    try:
+        error = server_failures.get_nowait()
+    except queue.Empty:
+        raise RuntimeError(f"FastAPI server exited unexpectedly {phase}.") from None
+    raise RuntimeError(f"FastAPI server crashed {phase}.") from error
+
+
+def monitor_worker_processes(server_thread, tunnel, server_failures, poll_interval=1):
+    while True:
+        if not server_thread.is_alive():
+            _raise_server_stopped(server_failures, "after startup")
+        tunnel_exit_code = tunnel.poll()
+        if tunnel_exit_code is not None:
+            raise RuntimeError(
+                f"Cloudflare Tunnel exited unexpectedly with status {tunnel_exit_code}."
+            )
+        time.sleep(poll_interval)
+
+
 def _read_tunnel_output(process, output_queue):
     for line in process.stdout:
-        output_queue.put(line)
+        print(f"[cloudflared] {line.rstrip()}", flush=True)
+        tunnel_url = extract_tunnel_url(line)
+        if tunnel_url:
+            output_queue.put(tunnel_url)
 
 
 def start_tunnel(cloudflared_path, port):
@@ -258,20 +290,23 @@ def start_tunnel(cloudflared_path, port):
     deadline = time.monotonic() + 120
     try:
         while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError("Cloudflare Tunnel exited before providing a URL.")
             try:
-                line = output_queue.get(timeout=0.5)
+                tunnel_url = output_queue.get(timeout=0.5)
             except queue.Empty:
-                continue
-            tunnel_url = extract_tunnel_url(line)
-            if tunnel_url:
+                tunnel_url = None
+            if tunnel_url is not None:
                 print(f"Worker 1 tunnel URL: {tunnel_url}", flush=True)
                 return process
+            exit_code = process.poll()
+            if exit_code is not None:
+                raise RuntimeError(
+                    f"Cloudflare Tunnel exited before providing a URL (status {exit_code})."
+                )
         raise RuntimeError("Cloudflare Tunnel did not provide a URL before timeout.")
     except Exception:
-        process.terminate()
-        process.wait(timeout=10)
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
         raise
 
 
@@ -300,15 +335,25 @@ def run(cloudflared_path):
             log_level="warning",
         )
     )
-    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_failures = queue.Queue()
+    server_thread = threading.Thread(
+        target=_run_uvicorn,
+        args=(server, server_failures),
+        daemon=True,
+    )
     server_thread.start()
     tunnel = None
     try:
-        wait_for_health(api_key, port)
+        print(f"Starting Worker 1 API on http://127.0.0.1:{port}", flush=True)
+        wait_for_health(
+            api_key,
+            port,
+            server_thread=server_thread,
+            server_failures=server_failures,
+        )
+        print(f"Worker 1 health check passed: http://127.0.0.1:{port}/health", flush=True)
         tunnel = start_tunnel(cloudflared_path, port)
-        while tunnel.poll() is None and server_thread.is_alive():
-            time.sleep(1)
-        raise RuntimeError("Worker 1 server or Cloudflare Tunnel stopped.")
+        monitor_worker_processes(server_thread, tunnel, server_failures)
     finally:
         server.should_exit = True
         server_thread.join(timeout=10)

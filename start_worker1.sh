@@ -23,15 +23,29 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
   exit 1
 fi
 
-python -m pip uninstall -y llama-cpp-python >/dev/null 2>&1 || true
-python -m pip install \
-  --disable-pip-version-check \
-  --no-cache-dir \
-  --force-reinstall \
-  --index-url https://pypi.org/simple \
-  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
-  --only-binary=llama-cpp-python \
-  -r requirements-worker1.txt
+if [[ "${NEXORA_WORKER_1_SKIP_INSTALL:-0}" == "1" ]]; then
+  printf '%s\n' 'Skipping package installation; verifying installed Worker 1 runtime.'
+  python - <<'PY'
+import importlib.metadata
+
+from worker1_start import validate_native_llama_cpp
+
+version = importlib.metadata.version("llama-cpp-python")
+if version != "0.3.36":
+    raise SystemExit(f"Expected llama-cpp-python 0.3.36, found {version}.")
+validate_native_llama_cpp()
+PY
+else
+  python -m pip uninstall -y llama-cpp-python >/dev/null 2>&1 || true
+  python -m pip install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --force-reinstall \
+    --index-url https://pypi.org/simple \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+    --only-binary=llama-cpp-python \
+    -r requirements-worker1.txt
+fi
 
 case "$(uname -m)" in
   x86_64)
