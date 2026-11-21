@@ -19,15 +19,42 @@ import worker1_app
 
 
 WORKER1_DIAGNOSTICS_V2 = "WORKER1_DIAGNOSTICS_V2"
-MODEL_REPOSITORY = "Qwen/Qwen2.5-7B-Instruct-GGUF"
-MODEL_REVISION = "bb5d59e06d9551d752d08b292a50eb208b07ab1f"
-MODEL_FILES = (
-    "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
-    "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf",
-)
+MODEL_VARIANTS = {
+    "1.5b": {
+        "repository": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+        "revision": "91cad51170dc346986eccefdc2dd33a9da36ead9",
+        "files": ("qwen2.5-1.5b-instruct-q4_k_m.gguf",),
+        "description": "Qwen 2.5 1.5B Instruct Q4_K_M",
+    },
+    "7b": {
+        "repository": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+        "revision": "bb5d59e06d9551d752d08b292a50eb208b07ab1f",
+        "files": (
+            "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
+            "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf",
+        ),
+        "description": "Qwen 2.5 7B Instruct Q4_K_M",
+    },
+}
 API_KEY_SECRET_NAME = "NEXORA_WORKER_1_API_KEY"
 DEFAULT_MODEL_DIRECTORY = Path("/kaggle/working/nexora-worker1-model")
 TUNNEL_URL_PATTERN = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com", re.IGNORECASE)
+
+
+def get_model_variant():
+    model_size = os.environ.get("NEXORA_WORKER_1_MODEL", "1.5b").strip().lower()
+    try:
+        return model_size, MODEL_VARIANTS[model_size]
+    except KeyError:
+        raise RuntimeError(
+            "NEXORA_WORKER_1_MODEL must be either '1.5b' or '7b'."
+        ) from None
+
+
+_, MODEL_CONFIG = get_model_variant()
+MODEL_REPOSITORY = MODEL_CONFIG["repository"]
+MODEL_REVISION = MODEL_CONFIG["revision"]
+MODEL_FILES = MODEL_CONFIG["files"]
 
 
 def read_api_key_from_kaggle():
@@ -59,7 +86,7 @@ def download_model(model_directory=DEFAULT_MODEL_DIRECTORY):
         )
     )
     if any(not (snapshot_path / filename).is_file() for filename in MODEL_FILES):
-        raise RuntimeError("The pinned Qwen GGUF model shards are incomplete.")
+        raise RuntimeError("The pinned Qwen GGUF model files are incomplete.")
     return snapshot_path / MODEL_FILES[0]
 
 
@@ -129,20 +156,22 @@ def verify_llama_cpp_runtime(model_directory):
             "does not contain libggml-cpu.so."
         )
 
-    shard_sizes = {}
+    model_file_sizes = {}
     for filename in MODEL_FILES:
-        shard_path = Path(model_directory) / filename
-        if not shard_path.is_file():
-            raise RuntimeError(f"Required GGUF shard is missing: {shard_path}")
-        shard_sizes[filename] = shard_path.stat().st_size
+        model_file = Path(model_directory) / filename
+        if not model_file.is_file():
+            raise RuntimeError(f"Required GGUF model file is missing: {model_file}")
+        model_file_sizes[filename] = model_file.stat().st_size
 
     print(
         f"llama-cpp-python {package_version}; CPU backend: {cpu_backend}",
         flush=True,
     )
     print(
-        "Qwen GGUF shards: "
-        + ", ".join(f"{name}={size} bytes" for name, size in shard_sizes.items()),
+        "Qwen GGUF model files: "
+        + ", ".join(
+            f"{name}={size} bytes" for name, size in model_file_sizes.items()
+        ),
         flush=True,
     )
     return cpu_backend
@@ -153,17 +182,17 @@ def load_model(model_path):
 
     model_path = Path(model_path)
     if not model_path.is_file():
-        raise RuntimeError(f"The split GGUF entry shard is missing: {model_path}")
+        raise RuntimeError(f"The GGUF model file is missing: {model_path}")
 
-    missing_shards = [
+    missing_model_files = [
         model_path.parent / filename
         for filename in MODEL_FILES
         if not (model_path.parent / filename).is_file()
     ]
-    if missing_shards:
+    if missing_model_files:
         raise RuntimeError(
-            "Both pinned Qwen GGUF shards are required; missing: "
-            + ", ".join(filename.name for filename in missing_shards)
+            "Pinned Qwen GGUF model files are required; missing: "
+            + ", ".join(filename.name for filename in missing_model_files)
         )
 
     verify_llama_cpp_runtime(model_path.parent)
@@ -316,12 +345,15 @@ def run(cloudflared_path):
     os.environ[API_KEY_SECRET_NAME] = api_key
     port = int(os.environ.get("NEXORA_WORKER_1_PORT", "7860"))
 
-    print("Downloading the pinned Qwen 2.5 7B Instruct Q4_K_M model.", flush=True)
+    print(
+        f"Downloading the pinned {MODEL_CONFIG['description']} model.",
+        flush=True,
+    )
     model_path = download_model()
     model_directory = model_path.parent
     print(
-        "Loading the CPU model with split shards: "
-        f"{model_directory / MODEL_FILES[0]}, {model_directory / MODEL_FILES[1]}.",
+        "Loading the CPU model file: "
+        f"{model_directory / MODEL_FILES[0]}.",
         flush=True,
     )
     worker1_app.app.state.model = load_model(model_path)

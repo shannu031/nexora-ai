@@ -72,6 +72,36 @@ class WorkerOneApiTests(unittest.TestCase):
 
 
 class WorkerOneStartupTests(unittest.TestCase):
+    def test_model_defaults_to_1_5b_and_keeps_7b_available(self):
+        with patch.dict(os.environ, {}, clear=True):
+            model_size, config = worker1_start.get_model_variant()
+        self.assertEqual(model_size, "1.5b")
+        self.assertEqual(
+            config["repository"],
+            "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+        )
+        self.assertEqual(
+            config["revision"],
+            "91cad51170dc346986eccefdc2dd33a9da36ead9",
+        )
+        self.assertEqual(
+            config["files"],
+            ("qwen2.5-1.5b-instruct-q4_k_m.gguf",),
+        )
+
+        with patch.dict(os.environ, {"NEXORA_WORKER_1_MODEL": "7b"}, clear=True):
+            model_size, config = worker1_start.get_model_variant()
+        self.assertEqual(model_size, "7b")
+        self.assertEqual(
+            config["repository"],
+            "Qwen/Qwen2.5-7B-Instruct-GGUF",
+        )
+
+    def test_unsupported_model_size_fails_with_supported_values(self):
+        with patch.dict(os.environ, {"NEXORA_WORKER_1_MODEL": "large"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "'1.5b' or '7b'"):
+                worker1_start.get_model_variant()
+
     def test_api_key_is_read_from_kaggle_secrets_each_start(self):
         stable_key = secrets.token_urlsafe(32)
 
@@ -89,7 +119,7 @@ class WorkerOneStartupTests(unittest.TestCase):
         self.assertEqual(first_key, stable_key)
         self.assertEqual(second_key, stable_key)
 
-    def test_model_download_uses_pinned_repository_and_both_q4_k_m_shards(self):
+    def test_model_download_uses_pinned_repository_and_q4_k_m_files(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             model_directory = Path(temporary_directory)
 
@@ -108,7 +138,7 @@ class WorkerOneStartupTests(unittest.TestCase):
 
         self.assertEqual(model_path.name, worker1_start.MODEL_FILES[0])
 
-    def test_llama_cpp_runtime_preflight_requires_cpu_backend_and_both_shards(self):
+    def test_llama_cpp_runtime_preflight_requires_cpu_backend_and_model_files(self):
         fake_llama_cpp = types.ModuleType("llama_cpp")
         fake_llama_cpp.__version__ = "0.3.36"
 

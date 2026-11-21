@@ -1,9 +1,10 @@
 # Worker 1 Recovery
 
-Worker 1 runs Qwen 2.5 7B Instruct Q4_K_M on a Kaggle CPU session and exposes
-the existing authenticated `/health` and `/generate` API through a Cloudflare
-Quick Tunnel. Kaggle sessions expire; this procedure makes recovery
-repeatable, not permanent.
+Worker 1 runs Qwen 2.5 1.5B Instruct Q4_K_M by default on a Kaggle CPU session
+and exposes the existing authenticated `/health` and `/generate` API through a
+Cloudflare Quick Tunnel. Set `NEXORA_WORKER_1_MODEL=7b` before startup to use
+the larger Qwen 2.5 7B Instruct Q4_K_M model instead. Kaggle sessions expire;
+this procedure makes recovery repeatable, not permanent.
 
 ## One-Time Setup
 
@@ -102,9 +103,8 @@ checkout is not running the reviewed launcher. After the implementation has
 been committed and pushed, synchronize `origin/main` again before restarting.
 
 The script pins the Cloudflare Tunnel binary and verifies its SHA-256 checksum,
-installs the versions in `requirements-worker1.txt`, downloads both Q4_K_M
-shards from Hugging Face revision
-`bb5d59e06d9551d752d08b292a50eb208b07ab1f`, loads the first split shard with
+installs the versions in `requirements-worker1.txt`, downloads the selected
+Q4_K_M model from its pinned Hugging Face revision, loads it with
 `llama-cpp-python`, starts FastAPI on loopback, and only then starts the tunnel.
 Wait for the line beginning `Worker 1 tunnel URL:`. The tunnel URL is public;
 the API key is not included in that line or forwarded to the `cloudflared`
